@@ -1,162 +1,144 @@
 ﻿using Model;
-using Model.Runtime; //импортирует пространство имен для работы с моделью игры
-using Model.Runtime.Projectiles; //импортирует классы для работы со снарядами
-using System;
-using System.Collections.Generic; //импортирует коллекции (List, Dictionary и т.д.)
-using UnityEngine; //импортирует основной функционал Unity
+using Model.Runtime.Projectiles;
+using System.Collections.Generic;
+using UnityEngine;
 using Utilities;
-using static UnityEngine.GraphicsBuffer; //импортирует статические методы GraphicsBuffer
 
-namespace UnitBrains.Player //определяет пространство имен для логики юнитов игрока
+namespace UnitBrains.Player
 {
-    public class SecondUnitBrain : DefaultPlayerUnitBrain //объявление публичного класса для второго юнита : наследование от базового класса для всех юнитов игрока
+    public class SecondUnitBrain : DefaultPlayerUnitBrain
     {
-        public override string TargetUnitName => "Cobra Commando"; //Переопределение свойства TargetUnitName - возвращает имя цели для этого юнита ("Cobra Commando")
-        private const float OverheatTemperature = 3f; //константа температуры перегрева (при достижении 3 оружие перегревается)
-        private const float OverheatCooldown = 2f; //константа времени остывания в секундах
-        private float _temperature = 0f; //текущая температура оружия (начинается с 0)
-        private float _cooldownTime = 0f; //время остывания (используется для таймера)
-        private bool _overheated; //флаг перегрева (true = оружие перегрето)
+        public override string TargetUnitName => "Cobra Commando";
+        private const float OverheatTemperature = 3f; //температура перегрева
+        private const float OverheatCooldown = 2f; //время остывания
+        private float _temperature = 0f; //текущая температур оружия
+        private float _cooldownTime = 0f; //время с начала остывания
+        private bool _overheated; //флаг перегрева (true - перегрето)
 
-        // Новое поле для хранения целей, к которым нужно идти
-        List<Vector2Int> _targetsToChase = new List<Vector2Int>();
+        
+        // B.Создаем новое поле для хранения целей, к которым нужно идти, но которые вне зоны досягаемости
+        
+        List<Vector2Int> _outOfRangeTargets = new List<Vector2Int>();
 
-        protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList) //Переопределение метода - вызывается для создания снарядов по цели(forTarget - координаты цели, intoList - список для добавления созданных снарядов)
+        protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList) //метод генерации снарядов (forTarget - цель для выстрела, список куда добавляются созданные снаряды)
         {
-            /*float overheatTemperature = OverheatTemperature;*/ //Создает локальную переменную с температурой перегрева (дублирование константы)
-
-            // Homework 1.3 (1st block, 3rd module)
-
-            //проверяем, не перегрето ли оружие
-            if (GetTemperature() >= OverheatTemperature)
+            float overheatTemperature = OverheatTemperature; //локальная переменная для температуры перегрева
+                                                             ///////////////////////////////////////
+                                                             // Homework 1.3 (1st block, 3rd module)
+                                                             ///////////////////////////////////////           
+            if (GetTemperature() >= overheatTemperature)
             {
-                return; //оружие перегрелось, прерываем, если температура >= 3, метод завершается (ничего не стреляет)
+                return;
             }
 
-            // Определяем количество снарядов (минимум 1)
-            int projectileCount = Mathf.Max(1, Mathf.FloorToInt(GetTemperature() + 1));
-            //Mathf.FloorToInt - округляет вниз до целого числа
-            //GetTemperature() + 1 - при температуре 0 дает 1, при 1 дает 2, при 2 дает 3
-            //Mathf.Max(1, ...) - гарантирует минимум 1 снаряд
-            //Примеры: temp = 0 → count = 1, temp = 1 → count = 2, temp = 2 → count = 3
-            
-                
-            //Создание нужного количества снарядов
+            int currentTemp = GetTemperature();
+            int projectileCount = currentTemp + 1;
+
             for (int i = 0; i < projectileCount; i++)
             {
-                var projectile = CreateProjectile(forTarget); //CreateProjectile - создает снаряд для цели
-                AddProjectileToList(projectile, intoList); //добавляет снаряд в список (активирует его в игре)
+                var projectile = CreateProjectile(forTarget); //создание снаряда направленного в указанную цель
+                AddProjectileToList(projectile, intoList); //добавление созданного снаряда в список
             }
 
-            // Увеличиваем температуру на 1, вызов метода
-            IncreaseTemperature();
-
-            // Проверяем перегрев после выстрела
-            if (GetTemperature() >= OverheatTemperature)
-            {
-                _overheated = true; //Если температура >= 3, устанавливает флаг перегрева
-                _cooldownTime = Time.time + OverheatCooldown;//Запоминает время, когда оружие остынет (текущее время + 2 секунды)
-            }
+            IncreaseTemperature(); //увеличиваем температуру после выстрела
         }
 
-        public override Vector2Int GetNextStep()//Переопределение метода перемещения
+        public override Vector2Int GetNextStep()
         {
-            // Проверяем, есть ли цели для преследования
-            if (_targetsToChase.Count > 0)
+            // Если есть цели вне зоны досягаемости, идем к первой из них
+            if (_outOfRangeTargets.Count > 0)
             {
-                Vector2Int target = _targetsToChase[0];
-
-                // Проверяем, находится ли цель в зоне досягаемости
-                if (!IsTargetInRange(target))
-                {
-                    // Если цель вне зоны досягаемости - двигаемся к ней
-                    return unit.Pos.CalcNextStepTowards(target);
-                }
-                else
-                {
-                    // Если цель в зоне досягаемости - остаемся на месте
-                    return unit.Pos;
-                }
+                Vector2Int target = _outOfRangeTargets[0];
+                Vector2Int currentPos = unit.Pos;
+                return currentPos.CalcNextStepTowards(target);
             }
 
-            // Если целей для преследования нет - остаемся на месте
+            //Vector2Int position = Vector2Int.zero;
+            //Vector2Int nextPosition = Vector2Int.right;
+            //position = position.CalcNextStepTowards(nextPosition);
+            // Если целей вне зоны досягаемости нет, возвращаем текущую позицию юнита
             return unit.Pos;
-
         }
 
-        protected override List<Vector2Int> SelectTargets()
+        protected override List<Vector2Int> SelectTargets() //получает список всех достижимых целей
         {
-            // A. Получаем все доступные цели
-            List<Vector2Int> allTargets = (List<Vector2Int>)GetAllTargets();
-            List<Vector2Int> result = new List<Vector2Int>();
+            ///////////////////////////////////////
+            // Homework 1.4 (1st block, 4rd module)
+            ///////////////////////////////////////
 
-            // Очищаем список целей для преследования
-            _targetsToChase.Clear();
+            // Очищаем список целей вне зоны досягаемости
+            _outOfRangeTargets.Clear();
 
-            // B. Если есть цели
-            if (allTargets.Count > 0)
+            List<Vector2Int> result = new List<Vector2Int>(GetAllTargets()); //список всех достижимых целей
+
+
+            //если целей нет добавляем базу противника
+            if (result.Count == 0)
             {
-                // Находим ближайшую к нашей базе цель (самая опасная)
-                Vector2Int closestTarget = allTargets[0];
-                float closestDistance = DistanceToOwnBase(closestTarget);
-
-                for (int i = 1; i < allTargets.Count; i++)
+                // Определяем ID противника
+                int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
+                // Получаем позицию базы противника
+                Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId];
+                // Проверяем, находится ли база в зоне досягаемости
+                if (IsTargetInRange(enemyBasePos))
                 {
-                    Vector2Int target = allTargets[i];
-                    float distance = DistanceToOwnBase(target);
-
-                    if (distance < closestDistance)
-                    {
-                        closestDistance = distance;
-                        closestTarget = target;
-                    }
-                }
-
-                // Проверяем, находится ли самая опасная цель в зоне досягаемости
-                if (IsTargetInRange(closestTarget))
-                {
-                    // Если цель в зоне досягаемости - добавляем в result
-                    result.Add(closestTarget);
+                    // Если в зоне досягаемости - возвращаем как цель
+                    return new List<Vector2Int> { enemyBasePos };
                 }
                 else
                 {
-                    // Если цель вне зоны досягаемости - добавляем в список для преследования
-                    _targetsToChase.Add(closestTarget);
+                    // Если вне зоны досягаемости - добавляем в список для движения
+                    _outOfRangeTargets.Add(enemyBasePos);
+                    return new List<Vector2Int>();
                 }
+                
+            }
+
+            // Находим ближайшую к нашей базе цель (самая опасная)
+            Vector2Int closestTarget = result[0];
+            float closestDistance = DistanceToOwnBase(closestTarget);
+
+            // Перебираем всех остальных врагов
+            for (int i = 1; i < result.Count; i++)
+            {
+                Vector2Int target = result[i];
+                float distance = DistanceToOwnBase(target);
+
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closestTarget = target;
+                }
+            }
+
+            
+            if (IsTargetInRange(closestTarget))
+            {
+                // Если цель в зоне досягаемости, добавляем в результат
+                result.Add(closestTarget);
             }
             else
             {
-                // C. Если целей нет - добавляем базу противника
-                int enemyBaseId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
-                Vector2Int enemyBase = runtimeModel.RoMap.Bases[enemyBaseId];
-
-                // Проверяем, находится ли база противника в зоне досягаемости
-                if (IsTargetInRange(enemyBase))
-                {
-                    result.Add(enemyBase);
-                }
-                else
-                {
-                    // Если база вне зоны досягаемости - добавляем в список для преследования
-                    _targetsToChase.Add(enemyBase);
-                }
+                // Если цель вне зоны досягаемости, записываем в коллекцию для движения
+                _outOfRangeTargets.Add(closestTarget);
             }
 
+            // Очищаем список и добавляем только ближайшую цель
+            result.Clear();
+            result.Add(closestTarget);
+
             return result;
+
         }
 
-        public override void Update(float deltaTime, float time) //Метод вызывается каждый кадр, deltaTime - время между кадрами,
-                                                                 //time - текущее время игры, Проверяет, перегрето ли оружие
+        public override void Update(float deltaTime, float time) //обновляет состояние юнита каждый кадр
         {
             if (_overheated)
-            {              
-                _cooldownTime += deltaTime; //Увеличивает время остывания на время кадра
-                
-                float t = _cooldownTime / OverheatCooldown; //Вычисляет прогресс остывания, t будет 2 секунды
-                
-                _temperature = Mathf.Lerp(OverheatTemperature, 0, t); //Mathf.Lerp - линейная интерполяция, Плавно уменьшает температуру от 3 до 0 за время t
-                
-                if (t >= 1) //Когда прогресс достиг 1 (прошло 2 секунды), Сбрасывает таймер и флаг перегрева
+            {
+                _cooldownTime += Time.deltaTime; //если оружия перегрето, увелиичивает время остываения
+                float t = _cooldownTime / (OverheatCooldown / 10); //вычисляет процесс остывания 0,2 сек
+                _temperature = Mathf.Lerp(OverheatTemperature, 0, t); //плавное уменьшение температуры от 3 до 0 в зависимотси от прогресса остывания
+                if (t >= 1) //после завершения остывания сброс таймера и флага перегрева
                 {
                     _cooldownTime = 0;
                     _overheated = false;
@@ -164,30 +146,23 @@ namespace UnitBrains.Player //определяет пространство им
             }
         }
 
-        private int GetTemperature() //Возвращает температуру как целое число
+        private int GetTemperature() //возвращает текущую температуру как целое число
         {
-            if (_overheated)
+            if (_overheated) // если перегрето
             {
-                return (int)OverheatTemperature; //Если перегрет → возвращает 3
+                return (int)OverheatTemperature; //возврат 3
             }
-
-            else
+            else //иначе
             {
-                return (int)_temperature; //Иначе возвращает текущую температуру (0, 1, 2 или 3)
+                return (int)_temperature; // текущая температа
             }
 
         }
 
-        private void IncreaseTemperature()
+        private void IncreaseTemperature() //метод увеличения температуры
         {
-            _temperature += 1f; //Увеличивает температуру на 1
-            /*if (_temperature >= OverheatTemperature) _overheated = true;*/ //Если достигла 3, устанавливает флаг перегрева
-        }
-
-        // Вспомогательный метод для проверки, находится ли цель в зоне досягаемости
-        private new bool IsTargetInRange(Vector2Int target)
-        {
-            return unit.IsTargetInAttackRange(target);
+            _temperature += 1f; //увеличивает температуру на 1
+            if (_temperature >= OverheatTemperature) _overheated = true; //если текущая температура = 3, то перегрев
         }
     }
 }
