@@ -15,10 +15,22 @@ namespace UnitBrains.Player
         private float _cooldownTime = 0f; //время с начала остывания
         private bool _overheated; //флаг перегрева (true - перегрето)
 
-        
         // B.Создаем новое поле для хранения целей, к которым нужно идти, но которые вне зоны досягаемости
-        
         List<Vector2Int> _outOfRangeTargets = new List<Vector2Int>();
+
+        // A. Создаем статическое поле-счетчик для выдачи номеров юнитам
+        private static int _unitCounter = 0;
+        // A. Создаем поле с номером юнита
+        private int _unitNumber;
+        // A. Создаем константу для максимального количества целей для умного выбора
+        private const int MaxTargetsForSmartSelection = 3;
+
+        // Конструктор для присвоения номера юниту при создании
+        public SecondUnitBrain()
+        {
+            _unitNumber = _unitCounter;
+            _unitCounter++;
+        }
 
         protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList) //метод генерации снарядов (forTarget - цель для выстрела, список куда добавляются созданные снаряды)
         {
@@ -53,9 +65,6 @@ namespace UnitBrains.Player
                 return currentPos.CalcNextStepTowards(target);
             }
 
-            //Vector2Int position = Vector2Int.zero;
-            //Vector2Int nextPosition = Vector2Int.right;
-            //position = position.CalcNextStepTowards(nextPosition);
             // Если целей вне зоны досягаемости нет, возвращаем текущую позицию юнита
             return unit.Pos;
         }
@@ -69,66 +78,84 @@ namespace UnitBrains.Player
             // Очищаем список целей вне зоны досягаемости
             _outOfRangeTargets.Clear();
 
-            List<Vector2Int> result = new List<Vector2Int>(GetAllTargets()); //список всех достижимых целей
+            // B. Получаем все цели и очищаем список
+            List<Vector2Int> allTargets = new List<Vector2Int>(GetAllTargets());
+            List<Vector2Int> result = new List<Vector2Int>();
 
-
-            //если целей нет добавляем базу противника
-            if (result.Count == 0)
+            // Если в списке целей никого нет, добавляем базу противника
+            if (allTargets.Count == 0)
             {
                 // Определяем ID противника
                 int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
                 // Получаем позицию базы противника
                 Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId];
+
                 // Проверяем, находится ли база в зоне досягаемости
                 if (IsTargetInRange(enemyBasePos))
                 {
                     // Если в зоне досягаемости - возвращаем как цель
-                    return new List<Vector2Int> { enemyBasePos };
+                    result.Add(enemyBasePos);
+                    return result;
                 }
                 else
                 {
                     // Если вне зоны досягаемости - добавляем в список для движения
                     _outOfRangeTargets.Add(enemyBasePos);
-                    return new List<Vector2Int>();
+                    return result;
                 }
-                
             }
 
-            // Находим ближайшую к нашей базе цель (самая опасная)
-            Vector2Int closestTarget = result[0];
-            float closestDistance = DistanceToOwnBase(closestTarget);
+            // B. Сортируем цели по дистанции до нашей базы
+            SortByDistanceToOwnBase(allTargets);
 
-            // Перебираем всех остальных врагов
-            for (int i = 1; i < result.Count; i++)
+            // B. Рассчитываем, какую цель по счету должен атаковать текущий юнит
+            // Если целей меньше, чем MaxTargetsForSmartSelection, берем остаток от деления номера юнита на количество целей
+            int targetIndex;
+            if (allTargets.Count <= MaxTargetsForSmartSelection)
             {
-                Vector2Int target = result[i];
-                float distance = DistanceToOwnBase(target);
-
-                if (distance < closestDistance)
+                targetIndex = _unitNumber % allTargets.Count;
+            }
+            else
+            {
+                // Если целей больше, чем MaxTargetsForSmartSelection, берем остаток от деления на MaxTargetsForSmartSelection
+                targetIndex = _unitNumber % MaxTargetsForSmartSelection;
+                // Но если индекс выходит за пределы списка, корректируем
+                if (targetIndex >= allTargets.Count)
                 {
-                    closestDistance = distance;
-                    closestTarget = target;
+                    targetIndex = allTargets.Count - 1;
                 }
             }
 
-            
-            if (IsTargetInRange(closestTarget))
+            // Получаем выбранную цель по индексу
+            Vector2Int selectedTarget = allTargets[targetIndex];
+
+            // Проверяем, что цель в радиусе атаки
+            if (IsTargetInRange(selectedTarget))
             {
                 // Если цель в зоне досягаемости, добавляем в результат
-                result.Add(closestTarget);
+                result.Add(selectedTarget);
             }
             else
             {
                 // Если цель вне зоны досягаемости, записываем в коллекцию для движения
-                _outOfRangeTargets.Add(closestTarget);
+                _outOfRangeTargets.Add(selectedTarget);
+                // Ищем первую цель в списке, которая находится в зоне досягаемости
+                foreach (Vector2Int target in allTargets)
+                {
+                    if (IsTargetInRange(target))
+                    {
+                        result.Add(target);
+                        break;
+                    }
+                }
+                // Если ни одна цель не в зоне досягаемости, добавляем все цели в список для движения
+                if (result.Count == 0)
+                {
+                    _outOfRangeTargets.AddRange(allTargets);
+                }
             }
 
-            // Очищаем список и добавляем только ближайшую цель
-            result.Clear();
-            result.Add(closestTarget);
-
             return result;
-
         }
 
         public override void Update(float deltaTime, float time) //обновляет состояние юнита каждый кадр
