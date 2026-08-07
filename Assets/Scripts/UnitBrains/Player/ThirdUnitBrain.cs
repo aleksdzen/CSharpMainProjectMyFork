@@ -1,20 +1,14 @@
-using Model; // Подключение пространства имен Model, содержащего основные классы модели игры
-using Model.Runtime.Projectiles; // Подключение пространства имен для работы со снарядами
-using System.Collections.Generic; // Подключение для использования обобщенных коллекций (List, Dictionary и т.д.)
-using UnityEngine; // Подключение Unity-библиотеки для работы с Vector2Int и Time.deltaTime
-using Utilities; // Подключение вспомогательных утилит (в т.ч. расширения CalcNextStepTowards)
+using Model;
+using Model.Runtime.Projectiles; 
+using System.Collections.Generic; 
+using UnityEngine; 
+using Utilities;                                                                                                               
 
-namespace UnitBrains.Player // Объявление пространства имен для юнит-мозгов игрока
+namespace UnitBrains.Player
 {
-    public class ThirdUnitBrain : DefaultPlayerUnitBrain // Класс мозга третьего юнита, наследующий базовый класс игрового юнита
+    public class ThirdUnitBrain : DefaultPlayerUnitBrain 
     {
         public override string TargetUnitName => "Ironclad Behemoth"; // Переопределение свойства - возвращает имя цели для этого юнита
-
-        private const float OverheatTemperature = 3f; // Константа: температура перегрева оружия (3 градуса)
-        private const float OverheatCooldown = 2f; // Константа: время полного остывания оружия (2 секунды)
-        private float _temperature = 0f; // Текущая температура оружия (начинается с 0)
-        private float _cooldownTime = 0f; // Время, прошедшее с начала процесса остывания
-        private bool _overheated; // Флаг перегрева: true - оружие перегрето, false - работает нормально
 
         //поля для задержки атаки
         private float _attackDelay = 1f; // Задержка перед атакой после остановки движения (1 секунда)
@@ -28,7 +22,7 @@ namespace UnitBrains.Player // Объявление пространства и�
         private static int _unitCounter = 0;
         // Уникальный номер конкретного экземпляра юнита
         private int _unitNumber;
-        // Константа: максимальное количество целей для "умного" распределения между юнитами
+        // Константа: максимальное количество целей для распределения между юнитами
         private const int MaxTargetsForSmartSelection = 3;
 
         // Конструктор класса - вызывается при создании каждого экземпляра юнита
@@ -41,23 +35,14 @@ namespace UnitBrains.Player // Объявление пространства и�
         // Метод генерации снарядов при атаке
         protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList)
         {
-            float overheatTemperature = OverheatTemperature; // Копируем значение температуры перегрева в локальную переменную
-
-            if (GetTemperature() >= overheatTemperature) // Если текущая температура >= температуры перегрева (3)
-            {
-                return; // Выходим из метода - оружие перегрето, стрелять нельзя
-            }
-
-            int currentTemp = GetTemperature(); // Получаем текущую температуру (целое число)
-            int projectileCount = currentTemp + 1; // Количество снарядов = температура + 1 (при 0 -> 1 снаряд, при 1 -> 2, при 2 -> 3)
+            // Создаем всегда 3 снаряда (максимальное количество из предыдущей логики)
+            int projectileCount = 3;
 
             for (int i = 0; i < projectileCount; i++) // Цикл для создания указанного количества снарядов
             {
                 var projectile = CreateProjectile(forTarget); // Создаем один снаряд, направленный в цель
                 AddProjectileToList(projectile, intoList); // Добавляем созданный снаряд в общий список
             }
-
-            IncreaseTemperature(); // Увеличиваем температуру оружия после выстрела на 1
         }
 
         // Метод определения следующего шага движения юнита
@@ -178,7 +163,7 @@ namespace UnitBrains.Player // Объявление пространства и�
             return result; // Возвращаем список целей для атаки
         }
 
-        // Метод обновления состояния юнита (вызывается каждый кадр)
+        // Метод обновления состояния юнита
         public override void Update(float deltaTime, float time)
         {
             base.Update(deltaTime, time); // Вызов метода базового класса для стандартной логики обновления
@@ -192,39 +177,6 @@ namespace UnitBrains.Player // Объявление пространства и�
             {
                 _timeSinceLastMovement = 0f; // Сбрасываем таймер
             }
-
-            if (_overheated) // Если оружие перегрето
-            {
-                _cooldownTime += Time.deltaTime; // Увеличиваем время остывания (используем реальное время игры)
-                float t = _cooldownTime / (OverheatCooldown / 10); // Вычисляем прогресс остывания (делим на 0.2 сек за шаг)
-                _temperature = Mathf.Lerp(OverheatTemperature, 0, t); // Плавно уменьшаем температуру от 3 до 0
-                if (t >= 1) // Если прогресс достиг 1 (полное остывание)
-                {
-                    _cooldownTime = 0; // Сбрасываем время остывания
-                    _overheated = false; // Снимаем флаг перегрева
-                }
-            }
-        }
-
-        // Метод получения текущей температуры (возвращает целое число)
-        private int GetTemperature()
-        {
-            if (_overheated) // Если оружие перегрето
-            {
-                return (int)OverheatTemperature; // Возвращаем 3 (температура перегрева)
-            }
-            else // Иначе
-            {
-                return (int)_temperature; // Возвращаем текущую температуру (0, 1 или 2)
-            }
-        }
-
-        // Метод увеличения температуры после выстрела
-        private void IncreaseTemperature()
-        {
-            _temperature += 1f; // Увеличиваем температуру на 1
-            if (_temperature >= OverheatTemperature) // Если температура достигла или превысила порог перегрева (3)
-                _overheated = true; // Устанавливаем флаг перегрева
         }
     }
 }
