@@ -3,193 +3,267 @@ using Model.Runtime.Projectiles;
 using System.Collections.Generic;
 using UnityEngine;
 using Utilities;
+using UnitBrains.Pathfinding; // Импорт для использования AStarUnitPath
 
 namespace UnitBrains.Player
 {
     public class SecondUnitBrain : DefaultPlayerUnitBrain
     {
-        public override string TargetUnitName => "Cobra Commando";
-        private const float OverheatTemperature = 3f; //температура перегрева
-        private const float OverheatCooldown = 2f; //время остывания
-        private float _temperature = 0f; //текущая температур оружия
-        private float _cooldownTime = 0f; //время с начала остывания
-        private bool _overheated; //флаг перегрева (true - перегрето)
+        public override string TargetUnitName => "Cobra Commando"; // Имя юнита для идентификации
+        private const float OverheatTemperature = 3f; // Пороговая температура перегрева оружия
+        private const float OverheatCooldown = 2f; // Время остывания после перегрева (в секундах)
+        private float _temperature = 0f; // Текущая температура оружия
+        private float _cooldownTime = 0f; // Время, прошедшее с начала остывания
+        private bool _overheated; // Флаг, указывающий на перегрев оружия
 
-        // B.Создаем новое поле для хранения целей, к которым нужно идти, но которые вне зоны досягаемости
+        // Список целей, находящихся вне зоны досягаемости атаки
+        // Юнит будет двигаться к этим целям, используя A* pathfinding
         List<Vector2Int> _outOfRangeTargets = new List<Vector2Int>();
 
-        // A. Создаем статическое поле-счетчик для выдачи номеров юнитам
+        // Статический счетчик для присвоения уникальных номеров юнитам этого типа
         private static int _unitCounter = 0;
-        // A. Создаем поле с номером юнита
+        // Уникальный номер текущего экземпляра юнита
         private int _unitNumber;
-        // A. Создаем константу для максимального количества целей для умного выбора
+        // Максимальное количество целей для "умного" распределения между юнитами
         private const int MaxTargetsForSmartSelection = 3;
 
-        // Конструктор для присвоения номера юниту при создании
+        // Конструктор класса - вызывается при создании каждого нового юнита
         public SecondUnitBrain()
         {
-            _unitNumber = _unitCounter;
-            _unitCounter++;
+            _unitNumber = _unitCounter; // Присваиваем текущий номер из статического счетчика
+            _unitCounter++; // Увеличиваем счетчик для следующего юнита
         }
 
-        protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList) //метод генерации снарядов (forTarget - цель для выстрела, список куда добавляются созданные снаряды)
+        // Метод генерации снарядов при атаке
+        // forTarget - цель для выстрела
+        // intoList - список, куда добавляются созданные снаряды
+        protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList)
         {
-            float overheatTemperature = OverheatTemperature; //локальная переменная для температуры перегрева
-                                                             ///////////////////////////////////////
-                                                             // Homework 1.3 (1st block, 3rd module)
-                                                             ///////////////////////////////////////           
+            float overheatTemperature = OverheatTemperature; // Локальная переменная порога перегрева
+
+            // Если оружие перегрето, не создаем снаряды
             if (GetTemperature() >= overheatTemperature)
             {
-                return;
+                return; // Выходим из метода без создания снарядов
             }
 
-            int currentTemp = GetTemperature();
-            int projectileCount = currentTemp + 1;
+            // Количество снарядов зависит от текущей температуры: температура + 1
+            int currentTemp = GetTemperature(); // Получаем текущую температуру как целое число
+            int projectileCount = currentTemp + 1; // Вычисляем количество снарядов для выстрела
 
+            // Создаем указанное количество снарядов
             for (int i = 0; i < projectileCount; i++)
             {
-                var projectile = CreateProjectile(forTarget); //создание снаряда направленного в указанную цель
-                AddProjectileToList(projectile, intoList); //добавление созданного снаряда в список
+                var projectile = CreateProjectile(forTarget); // Создаем снаряд, направленный в цель
+                AddProjectileToList(projectile, intoList); // Добавляем снаряд в выходной список
             }
 
-            IncreaseTemperature(); //увеличиваем температуру после выстрела
+            IncreaseTemperature(); // Увеличиваем температуру оружия после выстрела
         }
 
+        // Метод определения следующего шага движения юнита с использованием A*
         public override Vector2Int GetNextStep()
         {
-            // Если есть цели вне зоны досягаемости, идем к первой из них
+            // Если юнит может атаковать цель в зоне досягаемости, остаемся на месте
+            if (HasTargetsInRange())
+                return unit.Pos;
+
+            Vector2Int target; // Цель для движения
+
+            // Определяем цель для движения
             if (_outOfRangeTargets.Count > 0)
             {
-                Vector2Int target = _outOfRangeTargets[0];
-                Vector2Int currentPos = unit.Pos;
-                return currentPos.CalcNextStepTowards(target);
+                target = _outOfRangeTargets[0]; // Берем первую цель из списка целей вне зоны атаки
+            }
+            else
+            {
+                // Если нет конкретных целей, идем к базе противника
+                int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
+                target = runtimeModel.RoMap.Bases[enemyId]; // Позиция вражеской базы
             }
 
-            // Если целей вне зоны досягаемости нет, возвращаем текущую позицию юнита
-            return unit.Pos;
+            // Если мы уже на цели, остаемся на месте
+            if (unit.Pos == target)
+                return unit.Pos;
+
+            // Создаем A* путь от текущей позиции до цели
+            ActivePath = new AStarUnitPath(runtimeModel, unit.Pos, target);
+
+            // Получаем следующий шаг по вычисленному пути
+            Vector2Int nextStep = ActivePath.GetNextStepFrom(unit.Pos);
+
+            // Проверяем валидность шага (разница не должна превышать 1 клетку)
+            Vector2Int delta = nextStep - unit.Pos;
+            if (Mathf.Abs(delta.x) > 1 || Mathf.Abs(delta.y) > 1)
+            {
+                // Если шаг невалидный, используем прямое движение к цели
+                Debug.LogWarning($"SecondUnitBrain: invalid A* step from {unit.Pos} to {nextStep}, using fallback");
+                nextStep = unit.Pos.CalcNextStepTowards(target);
+            }
+
+            // Проверяем проходимость выбранной клетки
+            if (!IsCellWalkable(nextStep))
+            {
+                Debug.LogWarning($"SecondUnitBrain: cell {nextStep} is not walkable, finding alternative");
+
+                // Ищем альтернативный шаг среди соседних клеток
+                Vector2Int[] directions = new Vector2Int[]
+                {
+                    Vector2Int.up,    // Проверяем клетку сверху
+                    Vector2Int.right, // Проверяем клетку справа
+                    Vector2Int.down,  // Проверяем клетку снизу
+                    Vector2Int.left   // Проверяем клетку слева
+                };
+
+                bool foundAlternative = false; // Флаг нахождения альтернативы
+                foreach (Vector2Int direction in directions)
+                {
+                    Vector2Int alternativeStep = unit.Pos + direction;
+                    if (IsCellWalkable(alternativeStep)) // Если клетка проходима
+                    {
+                        nextStep = alternativeStep; // Используем альтернативный шаг
+                        foundAlternative = true; // Устанавливаем флаг
+                        break; // Выходим из цикла
+                    }
+                }
+
+                if (!foundAlternative) // Если альтернатива не найдена
+                {
+                    Debug.LogWarning($"SecondUnitBrain: no alternative step from {unit.Pos}, staying in place");
+                    return unit.Pos; // Остаемся на месте
+                }
+            }
+
+            return nextStep; // Возвращаем валидный следующий шаг
         }
 
-        protected override List<Vector2Int> SelectTargets() //получает список всех достижимых целей
+        // Метод выбора целей для атаки
+        protected override List<Vector2Int> SelectTargets()
         {
-            ///////////////////////////////////////
-            // Homework 1.4 (1st block, 4rd module)
-            ///////////////////////////////////////
-
-            // Очищаем список целей вне зоны досягаемости
+            // Очищаем список целей для движения перед новым выбором
             _outOfRangeTargets.Clear();
 
-            // B. Получаем все цели и очищаем список
+            // Получаем все возможные цели (юниты противника + база)
             List<Vector2Int> allTargets = new List<Vector2Int>(GetAllTargets());
-            List<Vector2Int> result = new List<Vector2Int>();
+            List<Vector2Int> result = new List<Vector2Int>(); // Результирующий список целей для атаки
 
-            // Если в списке целей никого нет, добавляем базу противника
+            // Если целей на поле нет, нацеливаемся на базу противника
             if (allTargets.Count == 0)
             {
-                // Определяем ID противника
                 int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
-                // Получаем позицию базы противника
                 Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId];
 
-                // Проверяем, находится ли база в зоне досягаемости
+                // Проверяем, находится ли база в зоне досягаемости атаки
                 if (IsTargetInRange(enemyBasePos))
                 {
-                    // Если в зоне досягаемости - возвращаем как цель
-                    result.Add(enemyBasePos);
+                    result.Add(enemyBasePos); // Добавляем базу как цель для атаки
                     return result;
                 }
                 else
                 {
-                    // Если вне зоны досягаемости - добавляем в список для движения
-                    _outOfRangeTargets.Add(enemyBasePos);
+                    _outOfRangeTargets.Add(enemyBasePos); // Добавляем базу в список для движения
                     return result;
                 }
             }
 
-            // B. Сортируем цели по дистанции до нашей базы
+            // Сортируем цели по расстоянию до нашей базы (приоритет - ближайшие)
             SortByDistanceToOwnBase(allTargets);
 
-            // B. Рассчитываем, какую цель по счету должен атаковать текущий юнит
-            // Если целей меньше, чем MaxTargetsForSmartSelection, берем остаток от деления номера юнита на количество целей
+            // Распределяем цели между юнитами для избежания скучивания на одной цели
             int targetIndex;
-            if (allTargets.Count <= MaxTargetsForSmartSelection)
+            if (allTargets.Count <= MaxTargetsForSmartSelection) // Если целей мало (≤ 3)
             {
-                targetIndex = _unitNumber % allTargets.Count;
+                targetIndex = _unitNumber % allTargets.Count; // Распределяем по номеру юнита
             }
-            else
+            else // Если целей много (> 3)
             {
-                // Если целей больше, чем MaxTargetsForSmartSelection, берем остаток от деления на MaxTargetsForSmartSelection
-                targetIndex = _unitNumber % MaxTargetsForSmartSelection;
-                // Но если индекс выходит за пределы списка, корректируем
-                if (targetIndex >= allTargets.Count)
+                targetIndex = _unitNumber % MaxTargetsForSmartSelection; // Берем остаток от деления на 3
+                if (targetIndex >= allTargets.Count) // Если индекс выходит за границы
                 {
-                    targetIndex = allTargets.Count - 1;
+                    targetIndex = allTargets.Count - 1; // Корректируем на последний валидный индекс
                 }
             }
 
-            // Получаем выбранную цель по индексу
+            // Получаем выбранную цель по вычисленному индексу
             Vector2Int selectedTarget = allTargets[targetIndex];
 
-            // Проверяем, что цель в радиусе атаки
+            // Проверяем, находится ли выбранная цель в радиусе атаки
             if (IsTargetInRange(selectedTarget))
             {
-                // Если цель в зоне досягаемости, добавляем в результат
-                result.Add(selectedTarget);
+                result.Add(selectedTarget); // Добавляем цель для атаки
             }
             else
             {
-                // Если цель вне зоны досягаемости, записываем в коллекцию для движения
-                _outOfRangeTargets.Add(selectedTarget);
+                _outOfRangeTargets.Add(selectedTarget); // Добавляем цель для движения к ней
+
                 // Ищем первую цель в списке, которая находится в зоне досягаемости
                 foreach (Vector2Int target in allTargets)
                 {
-                    if (IsTargetInRange(target))
+                    if (IsTargetInRange(target)) // Если цель доступна для атаки
                     {
-                        result.Add(target);
-                        break;
+                        result.Add(target); // Добавляем как цель для атаки
+                        break; // Выходим из цикла
                     }
                 }
-                // Если ни одна цель не в зоне досягаемости, добавляем все цели в список для движения
+
+                // Если ни одна цель не доступна для атаки
                 if (result.Count == 0)
                 {
-                    _outOfRangeTargets.AddRange(allTargets);
+                    _outOfRangeTargets.AddRange(allTargets); // Добавляем все цели для движения
                 }
             }
 
-            return result;
+            return result; // Возвращаем список целей для атаки
         }
 
-        public override void Update(float deltaTime, float time) //обновляет состояние юнита каждый кадр
+        // Метод обновления состояния юнита (вызывается каждый кадр)
+        public override void Update(float deltaTime, float time)
         {
-            if (_overheated)
+            if (_overheated) // Если оружие перегрето
             {
-                _cooldownTime += Time.deltaTime; //если оружия перегрето, увелиичивает время остываения
-                float t = _cooldownTime / (OverheatCooldown / 10); //вычисляет процесс остывания 0,2 сек
-                _temperature = Mathf.Lerp(OverheatTemperature, 0, t); //плавное уменьшение температуры от 3 до 0 в зависимотси от прогресса остывания
-                if (t >= 1) //после завершения остывания сброс таймера и флага перегрева
+                _cooldownTime += Time.deltaTime; // Увеличиваем время остывания
+                float t = _cooldownTime / (OverheatCooldown / 10); // Вычисляем прогресс остывания (от 0 до 1)
+                _temperature = Mathf.Lerp(OverheatTemperature, 0, t); // Плавно уменьшаем температуру
+
+                if (t >= 1) // Если остывание завершено
                 {
-                    _cooldownTime = 0;
-                    _overheated = false;
+                    _cooldownTime = 0; // Сбрасываем таймер остывания
+                    _overheated = false; // Снимаем флаг перегрева
                 }
             }
         }
 
-        private int GetTemperature() //возвращает текущую температуру как целое число
+        // Вспомогательный метод получения текущей температуры как целого числа
+        private int GetTemperature()
         {
-            if (_overheated) // если перегрето
-            {
-                return (int)OverheatTemperature; //возврат 3
-            }
-            else //иначе
-            {
-                return (int)_temperature; // текущая температа
-            }
-
+            if (_overheated) // Если оружие перегрето
+                return (int)OverheatTemperature; // Возвращаем максимальную температуру (3)
+            else // Если не перегрето
+                return (int)_temperature; // Возвращаем текущую температуру
         }
 
-        private void IncreaseTemperature() //метод увеличения температуры
+        // Вспомогательный метод увеличения температуры после выстрела
+        private void IncreaseTemperature()
         {
-            _temperature += 1f; //увеличивает температуру на 1
-            if (_temperature >= OverheatTemperature) _overheated = true; //если текущая температура = 3, то перегрев
+            _temperature += 1f; // Увеличиваем температуру на 1 градус
+            if (_temperature >= OverheatTemperature) // Если достигнут порог перегрева
+                _overheated = true; // Устанавливаем флаг перегрева
+        }
+
+        // Вспомогательный метод проверки проходимости клетки
+        private bool IsCellWalkable(Vector2Int pos)
+        {
+            // Проверяем, что клетка в пределах карты
+            if (pos.x < 0 || pos.x >= runtimeModel.RoMap.Width ||
+                pos.y < 0 || pos.y >= runtimeModel.RoMap.Height)
+                return false;
+
+            // Проверяем, что клетка не занята стеной
+            if (runtimeModel.RoMap[pos])
+                return false;
+
+            // Клетка проходима (не проверяем занятость юнитами для конечной точки)
+            return true;
         }
     }
 }

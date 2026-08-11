@@ -1,31 +1,32 @@
 using Model;
-using Model.Runtime.Projectiles; 
-using System.Collections.Generic; 
-using UnityEngine; 
-using Utilities;                                                                                                               
+using Model.Runtime.Projectiles;
+using System.Collections.Generic;
+using UnityEngine;
+using Utilities;
+using UnitBrains.Pathfinding; // Импорт для использования AStarUnitPath
 
 namespace UnitBrains.Player
 {
-    public class ThirdUnitBrain : DefaultPlayerUnitBrain 
+    public class ThirdUnitBrain : DefaultPlayerUnitBrain
     {
-        public override string TargetUnitName => "Ironclad Behemoth"; // Переопределение свойства - возвращает имя цели для этого юнита
+        public override string TargetUnitName => "Ironclad Behemoth"; // Имя юнита для идентификации
 
-        //поля для задержки атаки
-        private float _attackDelay = 1f; // Задержка перед атакой после остановки движения (1 секунда)
+        // Параметры для реализации задержки атаки после движения
+        private float _attackDelay = 1f; // Задержка перед атакой после остановки (1 секунда)
         private float _timeSinceLastMovement = 0f; // Время, прошедшее с момента последнего движения
-        private bool _isMoving = false; // Флаг: движется ли юнит в данный момент
+        private bool _isMoving = false; // Флаг, указывающий движется ли юнит в данный момент
 
-        // Список целей, которые находятся вне зоны досягаемости - к ним юнит будет двигаться
+        // Список целей вне зоны досягаемости - юнит будет двигаться к ним используя A*
         List<Vector2Int> _outOfRangeTargets = new List<Vector2Int>();
 
-        // Статический счетчик для присвоения уникальных номеров каждому юниту этого типа
+        // Статический счетчик для присвоения уникальных номеров юнитам этого типа
         private static int _unitCounter = 0;
-        // Уникальный номер конкретного экземпляра юнита
+        // Уникальный номер текущего экземпляра юнита
         private int _unitNumber;
-        // Константа: максимальное количество целей для распределения между юнитами
+        // Максимальное количество целей для "умного" распределения между юнитами
         private const int MaxTargetsForSmartSelection = 3;
 
-        // Конструктор класса - вызывается при создании каждого экземпляра юнита
+        // Конструктор класса - вызывается при создании каждого юнита
         public ThirdUnitBrain()
         {
             _unitNumber = _unitCounter; // Присваиваем текущий номер из счетчика
@@ -33,150 +34,223 @@ namespace UnitBrains.Player
         }
 
         // Метод генерации снарядов при атаке
+        // forTarget - цель для выстрела
+        // intoList - список для добавления созданных снарядов
         protected override void GenerateProjectiles(Vector2Int forTarget, List<BaseProjectile> intoList)
         {
-            // Создаем всегда 3 снаряда (максимальное количество из предыдущей логики)
+            // Всегда создаем 3 снаряда (максимальная огневая мощь Behemoth)
             int projectileCount = 3;
 
-            for (int i = 0; i < projectileCount; i++) // Цикл для создания указанного количества снарядов
+            // Цикл создания указанного количества снарядов
+            for (int i = 0; i < projectileCount; i++)
             {
-                var projectile = CreateProjectile(forTarget); // Создаем один снаряд, направленный в цель
-                AddProjectileToList(projectile, intoList); // Добавляем созданный снаряд в общий список
+                var projectile = CreateProjectile(forTarget); // Создаем снаряд, направленный в цель
+                AddProjectileToList(projectile, intoList); // Добавляем снаряд в выходной список
             }
         }
 
-        // Метод определения следующего шага движения юнита
+        // Метод определения следующего шага движения юнита с использованием A*
         public override Vector2Int GetNextStep()
         {
-            // Проверяем, есть ли цели вне зоны досягаемости
+            // Проверяем, есть ли цели для движения (вне зоны атаки)
             if (_outOfRangeTargets.Count > 0)
             {
                 _isMoving = true; // Устанавливаем флаг движения
                 Vector2Int target = _outOfRangeTargets[0]; // Берем первую цель из списка
-                Vector2Int currentPos = unit.Pos; // Получаем текущую позицию юнита
-                return currentPos.CalcNextStepTowards(target); // Вычисляем следующий шаг к цели
+
+                // Если мы уже на цели, останавливаемся
+                if (unit.Pos == target)
+                {
+                    _isMoving = false; // Сбрасываем флаг движения
+                    return unit.Pos; // Остаемся на месте
+                }
+
+                // Создаем A* путь от текущей позиции до цели
+                ActivePath = new AStarUnitPath(runtimeModel, unit.Pos, target);
+
+                // Получаем следующий шаг по вычисленному пути
+                Vector2Int nextStep = ActivePath.GetNextStepFrom(unit.Pos);
+
+                // Проверяем валидность шага (не больше 1 клетки)
+                Vector2Int delta = nextStep - unit.Pos;
+                if (Mathf.Abs(delta.x) > 1 || Mathf.Abs(delta.y) > 1)
+                {
+                    // Если шаг невалидный, используем прямое движение
+                    Debug.LogWarning($"ThirdUnitBrain: invalid A* step from {unit.Pos} to {nextStep}, using fallback");
+                    nextStep = unit.Pos.CalcNextStepTowards(target);
+                }
+
+                // Проверяем проходимость выбранной клетки
+                if (!IsCellWalkable(nextStep))
+                {
+                    Debug.LogWarning($"ThirdUnitBrain: cell {nextStep} not walkable, finding alternative");
+
+                    // Ищем альтернативный шаг среди соседних клеток
+                    Vector2Int[] directions = new Vector2Int[]
+                    {
+                        Vector2Int.up,    // Проверяем вверх
+                        Vector2Int.right, // Проверяем вправо
+                        Vector2Int.down,  // Проверяем вниз
+                        Vector2Int.left   // Проверяем влево
+                    };
+
+                    bool foundAlternative = false; // Флаг нахождения альтернативы
+                    foreach (Vector2Int direction in directions)
+                    {
+                        Vector2Int alternativeStep = unit.Pos + direction;
+                        if (IsCellWalkable(alternativeStep)) // Если клетка проходима
+                        {
+                            nextStep = alternativeStep; // Используем альтернативу
+                            foundAlternative = true; // Устанавливаем флаг
+                            break; // Выходим из цикла
+                        }
+                    }
+
+                    if (!foundAlternative) // Если альтернатива не найдена
+                    {
+                        Debug.LogWarning($"ThirdUnitBrain: no alternative step from {unit.Pos}, staying in place");
+                        _isMoving = false; // Сбрасываем флаг движения
+                        return unit.Pos; // Остаемся на месте
+                    }
+                }
+
+                return nextStep; // Возвращаем валидный следующий шаг
             }
 
-            // Если целей вне зоны досягаемости нет, возвращаем текущую позицию (стоим на месте)
+            // Если целей для движения нет, стоим на месте
             _isMoving = false; // Сбрасываем флаг движения
-            return unit.Pos; // Возвращаем текущую позицию (юнит стоит на месте)
+            return unit.Pos; // Возвращаем текущую позицию (юнит не двигается)
         }
 
-        // Метод выбора целей для атаки
+        // Метод выбора целей для атаки с учетом задержки после движения
         protected override List<Vector2Int> SelectTargets()
         {
-            // Очищаем список целей вне зоны досягаемости
+            // Очищаем список целей для движения
             _outOfRangeTargets.Clear();
 
             // Получаем все доступные цели
             List<Vector2Int> allTargets = new List<Vector2Int>(GetAllTargets());
-            List<Vector2Int> result = new List<Vector2Int>(); // Список целей для атаки (результат)
+            List<Vector2Int> result = new List<Vector2Int>(); // Результирующий список целей для атаки
 
-            // БЛОКИРОВКА АТАКИ
-            // Проверяем: движется ли юнит или прошло меньше 1 секунды после остановки
+            // БЛОКИРОВКА АТАКИ ВО ВРЕМЯ ДВИЖЕНИЯ
+            // Если юнит движется или прошло меньше секунды после остановки
             if (_isMoving || _timeSinceLastMovement < _attackDelay)
             {
-                // Если есть цели - добавляем их в список для движения
+                // Если есть цели на поле
                 if (allTargets.Count > 0)
                 {
-                    _outOfRangeTargets.AddRange(allTargets); // Добавляем все цели в список для движения
+                    _outOfRangeTargets.AddRange(allTargets); // Добавляем все цели для движения к ним
                 }
                 else
                 {
-                    // Если нет целей - двигаемся к базе противника
-                    int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId; // Определяем ID врага
-                    Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId]; // Получаем позицию базы врага
-                    _outOfRangeTargets.Add(enemyBasePos); // Добавляем базу врага в список для движения
+                    // Если целей нет, движемся к базе противника
+                    int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
+                    Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId];
+                    _outOfRangeTargets.Add(enemyBasePos); // Добавляем базу как цель для движения
                 }
 
-                // Возвращаем пустой список - АТАКА ЗАБЛОКИРОВАНА
-                return result;
+                return result; // Возвращаем пустой список - атака заблокирована
             }
-            // === КОНЕЦ БЛОКИРОВКИ ===
+            // === КОНЕЦ БЛОКИРОВКИ АТАКИ ===
 
-            // Если список целей пуст (никого нет на поле)
+            // Если целей на поле нет
             if (allTargets.Count == 0)
             {
-                int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId; // Определяем ID врага
-                Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId]; // Получаем позицию базы врага
+                int enemyId = IsPlayerUnitBrain ? RuntimeModel.BotPlayerId : RuntimeModel.PlayerId;
+                Vector2Int enemyBasePos = runtimeModel.RoMap.Bases[enemyId];
 
                 if (IsTargetInRange(enemyBasePos)) // Если база в зоне досягаемости
                 {
-                    result.Add(enemyBasePos); // Добавляем базу в список целей для атаки
-                    return result; // Возвращаем результат
+                    result.Add(enemyBasePos); // Добавляем базу как цель для атаки
+                    return result;
                 }
                 else // Если база вне зоны досягаемости
                 {
-                    _outOfRangeTargets.Add(enemyBasePos); // Добавляем базу в список для движения
-                    return result; // Возвращаем пустой результат (атака невозможна)
+                    _outOfRangeTargets.Add(enemyBasePos); // Добавляем базу для движения к ней
+                    return result;
                 }
             }
 
-            // Сортируем все цели по расстоянию до нашей собственной базы (приоритет - ближние)
+            // Сортируем цели по расстоянию до нашей базы (приоритет - ближайшие)
             SortByDistanceToOwnBase(allTargets);
 
-            // Выбираем индекс цели для атаки, распределяя цели между юнитами
+            // Распределяем цели между юнитами для равномерной атаки
             int targetIndex;
-            if (allTargets.Count <= MaxTargetsForSmartSelection) // Если целей меньше или равно 3
+            if (allTargets.Count <= MaxTargetsForSmartSelection) // Если целей мало (≤ 3)
             {
-                targetIndex = _unitNumber % allTargets.Count; // Берем остаток от деления номера юнита на количество целей
+                targetIndex = _unitNumber % allTargets.Count; // Распределяем по номеру юнита
             }
-            else // Если целей больше 3
+            else // Если целей много (> 3)
             {
                 targetIndex = _unitNumber % MaxTargetsForSmartSelection; // Берем остаток от деления на 3
-                // Если индекс выходит за пределы списка
-                if (targetIndex >= allTargets.Count)
+                if (targetIndex >= allTargets.Count) // Если индекс за пределами списка
                 {
-                    targetIndex = allTargets.Count - 1; // Корректируем на последний валидный индекс
+                    targetIndex = allTargets.Count - 1; // Корректируем на последний индекс
                 }
             }
 
-            // Получаем выбранную цель по вычисленному индексу
+            // Получаем выбранную цель по индексу
             Vector2Int selectedTarget = allTargets[targetIndex];
 
-            // Проверяем, находится ли выбранная цель в радиусе атаки
+            // Проверяем, находится ли цель в зоне досягаемости
             if (IsTargetInRange(selectedTarget))
             {
-                // Если цель в зоне досягаемости - добавляем в результат
-                result.Add(selectedTarget);
+                result.Add(selectedTarget); // Добавляем для атаки
             }
             else
             {
-                // Если цель вне зоны досягаемости - добавляем в список для движения
-                _outOfRangeTargets.Add(selectedTarget);
-                // Ищем первую цель в списке, которая находится в зоне досягаемости
+                _outOfRangeTargets.Add(selectedTarget); // Добавляем для движения
+
+                // Ищем первую цель в зоне досягаемости из всего списка
                 foreach (Vector2Int target in allTargets)
                 {
-                    if (IsTargetInRange(target)) // Если цель в зоне досягаемости
+                    if (IsTargetInRange(target)) // Если цель доступна
                     {
-                        result.Add(target); // Добавляем в результат
-                        break; // Выходим из цикла, так как нашли цель
+                        result.Add(target); // Добавляем для атаки
+                        break; // Выходим из цикла
                     }
                 }
-                // Если ни одна цель не в зоне досягаемости
+
+                // Если ни одна цель не доступна для атаки
                 if (result.Count == 0)
                 {
-                    _outOfRangeTargets.AddRange(allTargets); // Добавляем все цели в список для движения
+                    _outOfRangeTargets.AddRange(allTargets); // Добавляем все цели для движения
                 }
             }
 
             return result; // Возвращаем список целей для атаки
         }
 
-        // Метод обновления состояния юнита
+        // Метод обновления состояния юнита (вызывается каждый кадр)
         public override void Update(float deltaTime, float time)
         {
-            base.Update(deltaTime, time); // Вызов метода базового класса для стандартной логики обновления
+            base.Update(deltaTime, time); // Вызываем базовый метод обновления
 
-            // Обновляем таймер без движения
+            // Обновляем таймер после движения
             if (!_isMoving) // Если юнит не движется
             {
-                _timeSinceLastMovement += Time.deltaTime; // Увеличиваем время с момента последнего движения
+                _timeSinceLastMovement += Time.deltaTime; // Увеличиваем время с момента остановки
             }
             else // Если юнит движется
             {
-                _timeSinceLastMovement = 0f; // Сбрасываем таймер
+                _timeSinceLastMovement = 0f; // Сбрасываем таймер при движении
             }
+        }
+
+        // Вспомогательный метод проверки проходимости клетки
+        private bool IsCellWalkable(Vector2Int pos)
+        {
+            // Проверяем, что клетка в пределах карты
+            if (pos.x < 0 || pos.x >= runtimeModel.RoMap.Width ||
+                pos.y < 0 || pos.y >= runtimeModel.RoMap.Height)
+                return false;
+
+            // Проверяем, что клетка не занята стеной
+            if (runtimeModel.RoMap[pos])
+                return false;
+
+            // Клетка проходима
+            return true;
         }
     }
 }
